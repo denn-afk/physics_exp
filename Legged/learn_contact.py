@@ -37,7 +37,7 @@ def pd_stand_policy(obs, noise_std=2.0):
 
 def collect_residual_dataset(
     dyn,
-    num_episodes=200,
+    num_episodes=500,
     horizon=300,
     dt=0.01,
     noise_std=2.0,
@@ -74,7 +74,7 @@ def collect_residual_dataset(
             h = dyn.h(q, dq)
             residual = M @ ddq_real + h - tau
 
-            # （可选 safety）把特别离谱的样本干掉，防止数值爆掉训练
+            # safety：炸掉的样本不要
             if not np.isfinite(residual).all():
                 if done:
                     break
@@ -92,22 +92,30 @@ def collect_residual_dataset(
     X = np.stack(X, axis=0)
     Y = np.stack(Y, axis=0)
 
+    # 可以顺便四舍五入一点，看 scale 舒服点（不影响训练）
+    Y_print = np.round(Y[:10], 3)
+    print("Sample Y (rounded):")
+    print(Y_print)
+
+    norms = np.linalg.norm(Y, axis=1)
     print("Collected dataset:", X.shape, Y.shape)
-    print("Residual stats: mean |r| =", np.mean(np.linalg.norm(Y, axis=1)),
-          "max |r| =", np.max(np.linalg.norm(Y, axis=1)))
+    print("Residual stats: mean |r| =", norms.mean(),
+          "max |r| =", norms.max(),
+          "p95 =", np.percentile(norms, 95),
+          "p99 =", np.percentile(norms, 99))
     return X, Y
 
 
 # ---------- 3) 一个小 MLP 学 residual(q,dq,tau) ----------
 
 class ResidualNet(nn.Module):
-    def __init__(self, in_dim=18, out_dim=6, hidden=128):
+    def __init__(self, in_dim=18, out_dim=6, hidden=2048):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden),
-            nn.Tanh(),
+            nn.LeakyReLU(),
             nn.Linear(hidden, hidden),
-            nn.Tanh(),
+            nn.LeakyReLU(),
             nn.Linear(hidden, out_dim),
         )
 
@@ -115,18 +123,28 @@ class ResidualNet(nn.Module):
         return self.net(x)
 
 
-def train_residual_net(X, Y,
-                       epochs=50,
-                       batch_size=512,
-                       lr=1e-3,
-                       device="cpu"):
+def train_residual_net(
+    X, Y,
+    epochs=50,
+    batch_size=512,
+    lr=1e-3,
+    device="cpu",
+    eps_scale=50.0,      # ★ 冲量 scale：控制“小冲量”的定义
+    max_weight=10.0      # ★ 防止权重过大
+):
+    """
+    使用 per-sample 加权 MSE：
+        loss_i = ||e_i||^2 / ( ||r_i|| + eps_scale )
+    其中 r_i 是真实 residual，这样：
+        - 小冲量 (||r|| 小) → 分母小 → 权重大：学得精细
+        - 大冲量 (||r|| 大) → 分母大 → 权重小：只大致拟合
+    """
 
     X_t = torch.from_numpy(X).float().to(device)
     Y_t = torch.from_numpy(Y).float().to(device)
 
     model = ResidualNet(in_dim=X.shape[1], out_dim=Y.shape[1]).to(device)
     opt = optim.Adam(model.parameters(), lr=lr)
-    loss_fn = nn.MSELoss()
 
     N = X_t.shape[0]
     num_batches = max(1, N // batch_size)
@@ -138,10 +156,24 @@ def train_residual_net(X, Y,
         for i in range(num_batches):
             idx = perm[i*batch_size:(i+1)*batch_size]
             xb = X_t[idx]
-            yb = Y_t[idx]
+            yb = Y_t[idx]        # 真 residual, [B, 6]
 
-            y_pred = model(xb)
-            loss = loss_fn(y_pred, yb)
+            y_pred = model(xb)   # [B, 6]
+            err = y_pred - yb    # [B, 6]
+
+            # ★ per-sample MSE
+            mse_per_sample = (err**2).mean(dim=1)   # [B]
+
+            # ★ 基于真实 residual 的 norm 做权重：w = 1 / (||r|| + eps_scale)
+            with torch.no_grad():
+                r_norm = torch.linalg.norm(yb, dim=1)           # [B]
+                denom = r_norm + eps_scale                      # 防止对极小 r 爆炸
+                w = 1.0 / denom
+                if max_weight is not None:
+                    w = torch.clamp(w, max=max_weight)          # 防止 weight 太大
+
+            # ★ 加权 loss
+            loss = (w * mse_per_sample).mean()
 
             opt.zero_grad()
             loss.backward()
@@ -151,7 +183,7 @@ def train_residual_net(X, Y,
 
         epoch_loss /= num_batches
         if ep % 5 == 0 or ep == 1:
-            print(f"[Epoch {ep:03d}] train MSE: {epoch_loss:.6f}")
+            print(f"[Epoch {ep:03d}] train weighted MSE: {epoch_loss:.6f}")
 
     return model
 
@@ -173,7 +205,7 @@ if __name__ == "__main__":
     print("Collecting residual dataset...")
     X, Y = collect_residual_dataset(
         dyn,
-        num_episodes=200,    # 可以先减成 20 跑快一点
+        num_episodes=500,    # 可以先少一点看效果
         horizon=300,
         dt=0.01,
         noise_std=2.0,
@@ -185,8 +217,10 @@ if __name__ == "__main__":
         X, Y,
         epochs=2000,
         batch_size=512,
-        lr=1e-3,
-        device=device
+        lr=5e-4,
+        device=device,
+        eps_scale=50.0,    # ★ 这里可以调：越大 → 越接近普通 MSE
+        max_weight=10.0    # ★ 防止极小冲量把梯度拉爆
     )
 
     # 可选：随便测几条的误差
@@ -196,3 +230,5 @@ if __name__ == "__main__":
         Y_hat = model(X_sample)
         err = (Y_hat - Y_sample).cpu().numpy()
         print("Sample residual |error|:", np.linalg.norm(err, axis=1))
+        for i in range(len(Y_sample)):
+            print(Y_sample[i].cpu().numpy(), Y_hat[i].cpu().numpy())
