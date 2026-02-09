@@ -6,7 +6,7 @@ from sim import physics_step
 
 def loop_show(dyn, q, dq, dt=0.01, mu=0.8, beta=0.2, iters=25, W=480, H=480, render_num=2):
     counter = 0
-    for _ in range(1000):
+    for _ in range(10000000000):
         start_time = time.time()
         q, dq, contact = physics_step(dyn, q, dq, dt, mu=mu, beta=beta, iters=iters)
         print(q)

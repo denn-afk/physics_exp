@@ -3,7 +3,7 @@
 import numpy as np
 from legged_dynamics import LegDynamicsCached
 from contact_pgs import resolve_toe_heel_pgs
-from leg_env import LegEnv
+from Legged.old.leg_env import LegEnv
 
 
 # ---- 纯函数版 forward（和 LegEnv.step 一样，但不改 env） ----

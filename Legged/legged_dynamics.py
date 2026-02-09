@@ -333,8 +333,12 @@ class LegDynamicsCached:
         return tuple(q.tolist() + dq.tolist() + self._p_vals)
 
     # ---- dynamics ----
-    def A(self, q, dq):
-        return np.array(self._A_fun(*self._pack(q,dq)), dtype=self.dtype).reshape(6,6)
+    def A(self, q, dq, rotor_inertia = 1e-1):
+        A = np.array(self._A_fun(*self._pack(q,dq)), dtype=self.dtype).reshape(6,6)
+        # Add rotor inertia to diagonal
+        for i in range(3, len(A)):
+            A[i, i] += rotor_inertia
+        return A
 
     def h(self, q, dq):
         return np.array(self._h_fun(*self._pack(q,dq)), dtype=self.dtype).reshape(6,)
