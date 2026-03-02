@@ -376,7 +376,7 @@ if __name__ == "__main__":
 
     # 1. Collect data
     print("Collecting trajectories...")
-    episodes = collect_trajectories(n_episodes=1000, seed=0)
+    episodes = collect_trajectories(n_episodes=3000, seed=0)
 
     # Train/val split
     split = int(0.8 * len(episodes))
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     # 3. Train
     print("Training VAE...")
     history = train_vae(model, train_loader, val_loader,
-                        n_epochs=100, lr=3e-4, beta=0.001, device=device)
+                        n_epochs=100, lr=3e-4, beta=0.1, device=device)
 
     # 4. Plot training curves
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))

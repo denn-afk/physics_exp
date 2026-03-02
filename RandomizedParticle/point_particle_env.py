@@ -246,27 +246,49 @@ class PointParticleTrackEnv(gym.Env):
         )
         return obs
 
+def get_pd_action(obs, kp=20.0, kd=8.0):
+    px, py, vx, vy, ptx, pty, vtx, vty, _ = obs
+
+    p = np.array([px, py])
+    v = np.array([vx, vy])
+    p_star = np.array([ptx, pty])
+    v_star = np.array([vtx, vty])
+
+    a = kp * (p_star - p) + kd * (v_star - v)
+    return a
+
+def collect_trajectories(env, num_episodes=50):
+    data = []
+    for _ in range(num_episodes):
+        obs, info = env.reset()
+        z_true = info["z_true"] # [mass, damping]
+        traj = []
+        for _ in range(env.horizon):
+            # 这里的 a 可以是你的 PD 控制器，也可以加点噪声
+            a = get_pd_action(obs) + np.random.normal(0, 1.0, size=(2,))
+            next_obs, r, done, truncated, info = env.step(a)
+            # 存储：当前的 (s, a) 和 下一帧的 s'
+            traj.append({'obs': np.array(obs), 'action': np.array(a), 'next_obs': np.array(next_obs)})
+            obs = next_obs
+            if done or truncated: break
+        data.append({'traj': traj, 'z_true': z_true})
+    return data
+
 if __name__ == "__main__":
     env = PointParticleTrackEnv(traj="circle", seed=0)
-    for _ in range(10000):  # run 5 episodes
+    for _ in range(5):  # run 5 episodes
         obs, info = env.reset()
+        # env.horizon = 2000  # 让它跑久一点，看看长期的变化趋势
 
         kp, kd = 20.0, 8.0
         for _ in range(env.horizon):
-            px, py, vx, vy, ptx, pty, vtx, vty, _ = obs
-
-            p = np.array([px, py])
-            v = np.array([vx, vy])
-            p_star = np.array([ptx, pty])
-            v_star = np.array([vtx, vty])
-
-            a = kp * (p_star - p) + kd * (v_star - v)
+            a = get_pd_action(obs, kp=kp, kd=kd)
 
             obs, r, terminated, truncated, info = env.step(a)
             env.render()
 
             if terminated or truncated:
                 break
-
+    print(collect_trajectories(env, num_episodes=2))
     env.close()
 
